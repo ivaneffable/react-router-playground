@@ -41,9 +41,7 @@ public/
 app/
   root.tsx               # Add manifest link and meta tags
   components/
-    UpdatePrompt.tsx      # Optional: Update prompt component
-  utils/
-    sw-register.ts       # Service worker registration (Option B)
+    PWARegister.tsx      # Service worker registration and update prompt
 
 vite.config.ts           # Add vite-plugin-pwa configuration
 package.json             # Add vite-plugin-pwa and workbox-window dependencies
@@ -271,27 +269,116 @@ Update `compilerOptions.types`:
 }
 ```
 
-### Step 5: Create Service Worker Registration Script
+### Step 5: Create Service Worker Registration Component
 
-**File**: `app/utils/sw-register.ts`
+**File**: `app/components/PWARegister.tsx`
+
+Create a component that handles service worker registration and optional update prompts using the `useRegisterSW` hook:
 
 ```typescript
-import { registerSW } from "virtual:pwa-register/react";
+import { useRegisterSW } from "virtual:pwa-register/react";
 
-export function registerServiceWorker() {
-  if (typeof window !== "undefined" && "serviceWorker" in navigator) {
-    const updateSW = registerSW({
-      onRegistered(r) {
-        console.log("SW Registered:", r);
-      },
-      onRegisterError(error) {
-        console.error("SW registration error", error);
-      },
-    });
+export function PWARegister() {
+  const {
+    offlineReady: [offlineReady, setOfflineReady],
+    needRefresh: [needRefresh, setNeedRefresh],
+    updateServiceWorker,
+  } = useRegisterSW({
+    onRegistered(r) {
+      console.log("SW Registered:", r);
+    },
+    onRegisterError(error) {
+      console.error("SW registration error", error);
+    },
+  });
 
-    return updateSW;
+  const close = () => {
+    setOfflineReady(false);
+    setNeedRefresh(false);
+  };
+
+  // Optional: Show prompt when update is available or app is offline-ready
+  // Remove this check if you don't want any UI
+  if (!offlineReady && !needRefresh) {
+    return null;
   }
-  return null;
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        bottom: "1rem",
+        right: "1rem",
+        padding: "1rem",
+        backgroundColor: "#D97706",
+        color: "white",
+        borderRadius: "0.5rem",
+        boxShadow: "0 4px 6px rgba(0, 0, 0, 0.1)",
+        zIndex: 1000,
+        maxWidth: "300px",
+      }}
+    >
+      <div style={{ marginBottom: "0.5rem" }}>
+        {offlineReady ? (
+          <span>App ready to work offline</span>
+        ) : (
+          <span>New content available, click reload to update.</span>
+        )}
+      </div>
+      <div style={{ display: "flex", gap: "0.5rem" }}>
+        {needRefresh && (
+          <button
+            onClick={() => updateServiceWorker(true)}
+            style={{
+              padding: "0.5rem 1rem",
+              backgroundColor: "white",
+              color: "#D97706",
+              border: "none",
+              borderRadius: "0.25rem",
+              cursor: "pointer",
+              fontWeight: "bold",
+            }}
+          >
+            Reload
+          </button>
+        )}
+        <button
+          onClick={close}
+          style={{
+            padding: "0.5rem 1rem",
+            backgroundColor: "transparent",
+            color: "white",
+            border: "1px solid white",
+            borderRadius: "0.25rem",
+            cursor: "pointer",
+          }}
+        >
+          Close
+        </button>
+      </div>
+    </div>
+  );
+}
+```
+
+**Alternative minimal version** (no prompt UI, just registration):
+
+If you don't want the update prompt UI, you can simplify this component:
+
+```typescript
+import { useRegisterSW } from "virtual:pwa-register/react";
+
+export function PWARegister() {
+  useRegisterSW({
+    onRegistered(r) {
+      console.log("SW Registered:", r);
+    },
+    onRegisterError(error) {
+      console.error("SW registration error", error);
+    },
+  });
+
+  return null; // No UI, just registers the service worker
 }
 ```
 
@@ -299,7 +386,7 @@ export function registerServiceWorker() {
 
 **File**: `app/root.tsx`
 
-Add import and call registration:
+Add the `PWARegister` component to register the service worker:
 
 ```typescript
 import {
@@ -310,11 +397,10 @@ import {
   Scripts,
   ScrollRestoration,
 } from "react-router";
-import { useEffect } from "react";
 
 import type { Route } from "./+types/root";
 import "./app.css";
-import { registerServiceWorker } from "./utils/sw-register";
+import { PWARegister } from "./components/PWARegister";
 
 export const links: Route.LinksFunction = () => [
   { rel: "manifest", href: "/manifest.webmanifest" },
@@ -332,10 +418,6 @@ export const links: Route.LinksFunction = () => [
 ];
 
 export function Layout({ children }: { children: React.ReactNode }) {
-  useEffect(() => {
-    registerServiceWorker();
-  }, []);
-
   return (
     <html lang="en">
       <head>
@@ -351,6 +433,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
         {children}
         <ScrollRestoration />
         <Scripts />
+        <PWARegister />
       </body>
     </html>
   );
@@ -359,9 +442,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
 // ... rest of component
 ```
 
-> **Note**: `useEffect` runs on client-side only. For SSR compatibility, consider creating a client-only component wrapper.
+> **Note**: The `useRegisterSW` hook automatically handles client-side only execution, so no `useEffect` or SSR compatibility concerns are needed.
 
-### Step 7: Create Offline Fallback (Optional but Recommended)
+### Step 8: Create Offline Fallback (Optional but Recommended)
 
 **Recommendation**: Show a simple offline page when network fails and no cache is available.
 
@@ -424,271 +507,16 @@ workbox: {
 
 **Recommendation**: Use the offline route approach for better UX and consistency with React Router patterns.
 
-### Step 8: Minimalist "Prompt" Implementation (Optional)
+### Step 7: Customize Update Prompt (Optional)
 
-**Recommendation**: Add a simple update prompt component to notify users when a new version of the app is available.
+The `PWARegister` component created in Step 5 already includes an update prompt. You can customize it further:
 
-**File**: `app/components/UpdatePrompt.tsx`
+**Customization options**:
 
-```typescript
-import { useRegisterSW } from "virtual:pwa-register/react";
-
-export function UpdatePrompt() {
-  const {
-    offlineReady: [offlineReady, setOfflineReady],
-    needRefresh: [needRefresh, setNeedRefresh],
-    updateServiceWorker,
-  } = useRegisterSW({
-    onRegistered(r) {
-      console.log("SW Registered:", r);
-    },
-    onRegisterError(error) {
-      console.error("SW registration error", error);
-    },
-  });
-
-  const close = () => {
-    setOfflineReady(false);
-    setNeedRefresh(false);
-  };
-
-  if (!offlineReady && !needRefresh) {
-    return null;
-  }
-
-  return (
-    <div
-      style={{
-        position: "fixed",
-        bottom: "1rem",
-        right: "1rem",
-        padding: "1rem",
-        backgroundColor: "#D97706",
-        color: "white",
-        borderRadius: "0.5rem",
-        boxShadow: "0 4px 6px rgba(0, 0, 0, 0.1)",
-        zIndex: 1000,
-        maxWidth: "300px",
-      }}
-    >
-      <div style={{ marginBottom: "0.5rem" }}>
-        {offlineReady ? (
-          <span>App ready to work offline</span>
-        ) : (
-          <span>New content available, click reload to update.</span>
-        )}
-      </div>
-      <div style={{ display: "flex", gap: "0.5rem" }}>
-        {needRefresh && (
-          <button
-            onClick={() => updateServiceWorker(true)}
-            style={{
-              padding: "0.5rem 1rem",
-              backgroundColor: "white",
-              color: "#D97706",
-              border: "none",
-              borderRadius: "0.25rem",
-              cursor: "pointer",
-              fontWeight: "bold",
-            }}
-          >
-            Reload
-          </button>
-        )}
-        <button
-          onClick={close}
-          style={{
-            padding: "0.5rem 1rem",
-            backgroundColor: "transparent",
-            color: "white",
-            border: "1px solid white",
-            borderRadius: "0.25rem",
-            cursor: "pointer",
-          }}
-        >
-          Close
-        </button>
-      </div>
-    </div>
-  );
-}
-```
-
-**File**: `app/root.tsx` - Add UpdatePrompt component
-
-```typescript
-import {
-  isRouteErrorResponse,
-  Links,
-  Meta,
-  Outlet,
-  Scripts,
-  ScrollRestoration,
-} from "react-router";
-import { useEffect } from "react";
-
-import type { Route } from "./+types/root";
-import "./app.css";
-import { registerServiceWorker } from "./utils/sw-register";
-import { UpdatePrompt } from "./components/UpdatePrompt";
-
-export const links: Route.LinksFunction = () => [
-  { rel: "manifest", href: "/manifest.webmanifest" },
-  { rel: "apple-touch-icon", href: "/icons/icon-192.png" },
-  { rel: "preconnect", href: "https://fonts.googleapis.com" },
-  {
-    rel: "preconnect",
-    href: "https://fonts.gstatic.com",
-    crossOrigin: "anonymous",
-  },
-  {
-    rel: "stylesheet",
-    href: "https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap",
-  },
-];
-
-export function Layout({ children }: { children: React.ReactNode }) {
-  useEffect(() => {
-    registerServiceWorker();
-  }, []);
-
-  return (
-    <html lang="en">
-      <head>
-        <meta charSet="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <meta name="theme-color" content="#D97706" />
-        <meta name="apple-mobile-web-app-capable" content="yes" />
-        <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-        <Meta />
-        <Links />
-      </head>
-      <body>
-        {children}
-        <ScrollRestoration />
-        <Scripts />
-        <UpdatePrompt />
-      </body>
-    </html>
-  );
-}
-
-// ... rest of component
-```
-
-**Alternative**: If you prefer to keep the registration logic in one place, you can replace Step 5's `sw-register.ts` with a component that handles both registration and prompts:
-
-**File**: `app/components/PWARegister.tsx`
-
-```typescript
-import { useEffect } from "react";
-import { useRegisterSW } from "virtual:pwa-register/react";
-
-export function PWARegister() {
-  const {
-    offlineReady: [offlineReady, setOfflineReady],
-    needRefresh: [needRefresh, setNeedRefresh],
-    updateServiceWorker,
-  } = useRegisterSW({
-    onRegistered(r) {
-      console.log("SW Registered:", r);
-    },
-    onRegisterError(error) {
-      console.error("SW registration error", error);
-    },
-  });
-
-  const close = () => {
-    setOfflineReady(false);
-    setNeedRefresh(false);
-  };
-
-  // Show prompt when update is available
-  if (!offlineReady && !needRefresh) {
-    return null;
-  }
-
-  return (
-    <div
-      style={{
-        position: "fixed",
-        bottom: "1rem",
-        right: "1rem",
-        padding: "1rem",
-        backgroundColor: "#D97706",
-        color: "white",
-        borderRadius: "0.5rem",
-        boxShadow: "0 4px 6px rgba(0, 0, 0, 0.1)",
-        zIndex: 1000,
-        maxWidth: "300px",
-      }}
-    >
-      <div style={{ marginBottom: "0.5rem" }}>
-        {offlineReady ? (
-          <span>App ready to work offline</span>
-        ) : (
-          <span>New content available, click reload to update.</span>
-        )}
-      </div>
-      <div style={{ display: "flex", gap: "0.5rem" }}>
-        {needRefresh && (
-          <button
-            onClick={() => updateServiceWorker(true)}
-            style={{
-              padding: "0.5rem 1rem",
-              backgroundColor: "white",
-              color: "#D97706",
-              border: "none",
-              borderRadius: "0.25rem",
-              cursor: "pointer",
-              fontWeight: "bold",
-            }}
-          >
-            Reload
-          </button>
-        )}
-        <button
-          onClick={close}
-          style={{
-            padding: "0.5rem 1rem",
-            backgroundColor: "transparent",
-            color: "white",
-            border: "1px solid white",
-            borderRadius: "0.25rem",
-            cursor: "pointer",
-          }}
-        >
-          Close
-        </button>
-      </div>
-    </div>
-  );
-}
-```
-
-Then in `app/root.tsx`, replace the `useEffect` and `registerServiceWorker` import with:
-
-```typescript
-import { PWARegister } from "./components/PWARegister";
-
-// Remove the useEffect and registerServiceWorker import
-
-export function Layout({ children }: { children: React.ReactNode }) {
-  return (
-    <html lang="en">
-      <head>
-        {/* ... head content ... */}
-      </head>
-      <body>
-        {children}
-        <ScrollRestoration />
-        <Scripts />
-        <PWARegister />
-      </body>
-    </html>
-  );
-}
-```
+- **Remove prompt UI entirely**: Use the minimal version shown in Step 5 (returns `null`)
+- **Custom styling**: Replace inline styles with CSS classes or styled components
+- **Different positioning**: Change the `position`, `bottom`, `right` styles
+- **Additional features**: Add animations, auto-dismiss timers, or custom messaging
 
 **Benefits of using `virtual:pwa-register/react`**:
 
@@ -697,6 +525,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
 - Handles both `offlineReady` and `needRefresh` states
 - Minimal code required
 - Type-safe with TypeScript
+- No utility files needed - everything in one component
 
 ## Testing
 
@@ -764,7 +593,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
 3. **Icons**: Simple gradient circle with router/network symbol (SVG provided)
 4. **Service worker library**: vite-plugin-pwa with Workbox
 5. **Cache invalidation**: skipWaiting + cleanupOutdatedCaches (automatic)
-6. **Service worker registration**: Option B (separate client-side script)
+6. **Service worker registration**: Hook-based component using `useRegisterSW` from `virtual:pwa-register/react`
 7. **Cache strategy**: Network-first for HTML (sufficient)
 8. **Update notifications**: Minimalist prompt component using `virtual:pwa-register/react`
 9. **Offline fallback**: Recommended - simple offline page with retry button
@@ -776,8 +605,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
 - Added Workbox runtime caching strategies for different asset types
 - Provided SVG icon design with brown-orange-yellow gradient
 - Added offline fallback recommendation and implementation
-- Service worker registration uses virtual module from vite-plugin-pwa
+- Service worker registration uses `useRegisterSW` hook from `virtual:pwa-register/react` in a React component
+- No utility files needed - registration and prompts handled in one component
 - Cache invalidation is automatic via plugin configuration
-- Update prompt component uses `useRegisterSW` hook from `virtual:pwa-register/react`
+- Update prompt is built into the registration component
 - TypeScript types need to be added to tsconfig.json
 - Icons need to be created from SVG (conversion steps provided)
