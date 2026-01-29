@@ -39,9 +39,11 @@ public/
     icon-512.png         # 512x512 icon
 
 app/
-  root.tsx               # Add manifest link and meta tags
-  components/
-    PWARegister.tsx      # Service worker registration and update prompt
+  root.tsx               # Add manifest link, meta tags, PWARegister, InstallButton
+  PWARegister.tsx        # Service worker registration and update prompt (needRefresh only)
+  PWARegister.module.css
+  InstallButton.tsx      # Button to trigger PWA install (calls beforeinstallprompt.prompt())
+  InstallButton.module.css
 
 vite.config.ts           # Add vite-plugin-pwa configuration
 package.json             # Add vite-plugin-pwa and workbox-window dependencies
@@ -382,11 +384,11 @@ export function PWARegister() {
 }
 ```
 
-### Step 6: Register Service Worker in Root Component
+### Step 6: Register PWA Components in Root
 
 **File**: `app/root.tsx`
 
-Add the `PWARegister` component to register the service worker:
+Add manifest link, PWA meta tags, `PWARegister`, and the install button component:
 
 ```typescript
 import {
@@ -400,7 +402,8 @@ import {
 
 import type { Route } from "./+types/root";
 import "./app.css";
-import { PWARegister } from "./components/PWARegister";
+import { InstallButton } from "./InstallButton";
+import { PWARegister } from "./PWARegister";
 
 export const links: Route.LinksFunction = () => [
   { rel: "manifest", href: "/manifest.webmanifest" },
@@ -434,6 +437,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <ScrollRestoration />
         <Scripts />
         <PWARegister />
+        <InstallButton />
       </body>
     </html>
   );
@@ -443,6 +447,122 @@ export function Layout({ children }: { children: React.ReactNode }) {
 ```
 
 > **Note**: The `useRegisterSW` hook automatically handles client-side only execution, so no `useEffect` or SSR compatibility concerns are needed.
+
+### Step 7: Install Button (Trigger PWA Install)
+
+Add a button that **triggers the native install prompt** when the user taps or clicks it. The button calls `beforeinstallprompt.prompt()` so the browser shows its install UI; the user can still dismiss it.
+
+**When to show the button**
+
+- **Mobile and desktop**: Show on both. Do not restrict by user agent or viewport; if `beforeinstallprompt` fires, the browser considers the app installable on that device (Chrome/Edge support install on desktop).
+- **Not already running as installed app**: `!window.matchMedia("(display-mode: standalone)").matches` and on iOS `!navigator.standalone`.
+- **Installable**: `beforeinstallprompt` has fired (store the event and use it when the button is clicked).
+
+Show the button when both “not standalone” and “installable” are true. It is **always visible** whenever these conditions are met (floating button, no “show once” or localStorage).
+
+**Hide-after-install behavior (Option A)**
+
+Rely only on “not standalone” and `beforeinstallprompt`. Do not use `localStorage`. If the user installs and later opens the site in a normal browser tab, the button may show again (the browser does not expose “was installed before”). That is acceptable for now.
+
+**File**: `app/InstallButton.tsx`
+
+```typescript
+import { useEffect, useState } from "react";
+import styles from "./InstallButton.module.css";
+
+interface BeforeInstallPromptEvent extends Event {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
+}
+
+function isStandalone(): boolean {
+  if (typeof window === "undefined") return false;
+  return (
+    window.matchMedia("(display-mode: standalone)").matches ||
+    (window.navigator as Navigator & { standalone?: boolean }).standalone === true
+  );
+}
+
+export function InstallButton() {
+  const [deferredPrompt, setDeferredPrompt] =
+    useState<BeforeInstallPromptEvent | null>(null);
+  const [showButton, setShowButton] = useState(false);
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      e.preventDefault();
+      setDeferredPrompt(e as BeforeInstallPromptEvent);
+    };
+
+    window.addEventListener("beforeinstallprompt", handler);
+
+    return () => {
+      window.removeEventListener("beforeinstallprompt", handler);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const standalone = isStandalone();
+    const installable = deferredPrompt !== null;
+
+    setShowButton(!standalone && installable);
+  }, [deferredPrompt]);
+
+  const handleInstallClick = async () => {
+    if (!deferredPrompt) return;
+
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+
+    if (outcome === "accepted") {
+      setShowButton(false);
+    }
+
+    setDeferredPrompt(null);
+  };
+
+  if (!showButton) {
+    return null;
+  }
+
+  return (
+    <button onClick={handleInstallClick} className={styles.installButton}>
+      Install App
+    </button>
+  );
+}
+```
+
+**File**: `app/InstallButton.module.css`
+
+```css
+.installButton {
+  position: fixed;
+  bottom: 1rem;
+  left: 1rem;
+  padding: 0.75rem 1.5rem;
+  background-color: #D97706;
+  color: white;
+  border: none;
+  border-radius: 0.5rem;
+  font-weight: bold;
+  cursor: pointer;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+  z-index: 999;
+}
+
+.installButton:hover {
+  background-color: #B45309;
+}
+
+.installButton:active {
+  transform: scale(0.98);
+}
+```
+
+Add `<InstallButton />` in `app/root.tsx` next to `PWARegister` (see Step 6).
 
 ### Step 8: Create Offline Fallback (Optional but Recommended)
 
@@ -552,7 +672,8 @@ The `PWARegister` component created in Step 5 already includes an update prompt.
 - [ ] Icons display correctly in app launcher
 - [ ] Theme color matches in browser UI
 - [ ] Cache invalidation works (build new version, verify old cache cleared)
-- [ ] Update prompt appears when new service worker is available (if implemented)
+- [ ] Update prompt appears when new service worker is available (needRefresh only)
+- [ ] Install button appears when installable and not standalone; tapping it shows native install UI
 
 ## Deployment Considerations
 
@@ -595,8 +716,9 @@ The `PWARegister` component created in Step 5 already includes an update prompt.
 5. **Cache invalidation**: skipWaiting + cleanupOutdatedCaches (automatic)
 6. **Service worker registration**: Hook-based component using `useRegisterSW` from `virtual:pwa-register/react`
 7. **Cache strategy**: Network-first for HTML (sufficient)
-8. **Update notifications**: Minimalist prompt component using `virtual:pwa-register/react`
-9. **Offline fallback**: Recommended - simple offline page with retry button
+8. **Update notifications**: Only when needRefresh (no "offline ready" message)
+9. **Install button**: Button that triggers native install via `beforeinstallprompt.prompt()`. Show on **mobile and desktop** when not standalone and when `beforeinstallprompt` has fired. Always visible when conditions are met (no localStorage). Option A: hide-after-install not persisted.
+10. **Offline fallback**: Recommended - simple offline page with retry button
 
 ## Notes for Review
 
@@ -608,6 +730,7 @@ The `PWARegister` component created in Step 5 already includes an update prompt.
 - Service worker registration uses `useRegisterSW` hook from `virtual:pwa-register/react` in a React component
 - No utility files needed - registration and prompts handled in one component
 - Cache invalidation is automatic via plugin configuration
-- Update prompt is built into the registration component
+- Update prompt is built into the registration component (needRefresh only)
+- Install button: show on mobile and desktop when installable and not standalone; always visible when conditions met; Option A (no localStorage)
 - TypeScript types need to be added to tsconfig.json
 - Icons need to be created from SVG (conversion steps provided)
