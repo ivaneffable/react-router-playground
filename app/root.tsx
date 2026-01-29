@@ -10,6 +10,7 @@ import {
 import type { Route } from "./+types/root";
 import "./app.css";
 import { PWARegister } from "./PWARegister";
+import { InstallButton } from "./InstallButton";
 
 export const links: Route.LinksFunction = () => [
   { rel: "manifest", href: "/manifest.webmanifest" },
@@ -46,6 +47,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <ScrollRestoration />
         <Scripts />
         <PWARegister />
+        <InstallButton />
       </body>
     </html>
   );
