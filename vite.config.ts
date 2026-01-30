@@ -4,9 +4,17 @@ import tsconfigPaths from "vite-tsconfig-paths";
 import netlifyReactRouter from "@netlify/vite-plugin-react-router";
 import netlify from "@netlify/vite-plugin";
 import { VitePWA } from "vite-plugin-pwa";
+import mdx from "@mdx-js/rollup";
+import remarkFrontmatter from "remark-frontmatter";
+import remarkMdxFrontmatter from "remark-mdx-frontmatter";
+import rehypePrettyCode from "rehype-pretty-code";
 
 export default defineConfig({
   plugins: [
+    mdx({
+      remarkPlugins: [remarkFrontmatter, remarkMdxFrontmatter],
+      rehypePlugins: [[rehypePrettyCode, { theme: "github-dark" }]],
+    }),
     reactRouter(),
     tsconfigPaths(),
     netlifyReactRouter(),
