@@ -1,0 +1,28 @@
+---
+title: Getting Started
+status: published
+excerpt: A quick guide to the blog - MDX in the repo, draft vs published, and pagination.
+date: 2025-01-22
+---
+
+This post is **published**, so it shows up on the blog index and at `/blog/getting-started`.
+
+## How it works
+
+1. **Content** — Posts are `.mdx` files in `content/blog/`. Slug comes from the filename.
+2. **Status** — Set `status: published` or `status: draft` in frontmatter. Drafts are not listed or viewable.
+3. **Pagination** — When there are more than 10 published posts, the index is paginated (10 per page).
+
+## Frontmatter
+
+Required:
+
+- `title` — Post title
+- `status` — `"draft"` or `"published"`
+
+Optional:
+
+- `excerpt` — Shown in the list and used for meta description
+- `date` — Publication date (e.g. `YYYY-MM-DD`)
+
+You’re ready to add more posts.
