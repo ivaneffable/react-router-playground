@@ -1,11 +1,12 @@
 import { Link, Outlet } from "react-router";
+import styles from "./route.module.css";
 
 export default function BlogLayout() {
   return (
-    <div className="blog-section">
-      <nav className="blog-nav">
+    <div className={styles.section}>
+      <nav className={styles.nav}>
         <Link to="/">Home</Link>
-        <span className="separator"> · </span>
+        <span className={styles.separator}> · </span>
         <Link to="/blog">Blog</Link>
       </nav>
       <Outlet />

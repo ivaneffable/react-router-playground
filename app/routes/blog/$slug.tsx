@@ -9,6 +9,7 @@ import {
 } from "react-router";
 import { slugFromPath } from "./utils";
 import type { Route } from "./+types/$slug";
+import styles from "./slug.module.css";
 
 const modules = import.meta.glob<{
   default: React.ComponentType;
@@ -74,15 +75,12 @@ export function ErrorBoundary() {
 export default function BlogPost() {
   const data = useLoaderData();
   return (
-    <main className="blog-post">
-      <Link to="/blog" className="back-link">
-        ← Back to blog
-      </Link>
+    <main className={styles.post}>
       <article>
         <h1>{data.title}</h1>
         {data.date && <time dateTime={data.date}>{data.date}</time>}
         <div
-          className="post-body prose"
+          className={styles.postBody}
           dangerouslySetInnerHTML={{ __html: data.html }}
         />
       </article>

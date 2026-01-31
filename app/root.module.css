@@ -1,0 +1,10 @@
+.errorBoundary {
+  max-width: var(--max-width);
+  margin: 0 auto;
+  padding: 2rem 1.5rem;
+  font-family: var(--font-body);
+}
+
+.errorBoundary h1 {
+  color: var(--color-accent);
+}

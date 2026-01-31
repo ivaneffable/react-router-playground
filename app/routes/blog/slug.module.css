@@ -1,0 +1,74 @@
+.post {
+  max-width: var(--max-width);
+  margin: 0 auto;
+  padding: 2rem 0;
+  padding-top: 1.5rem;
+}
+
+.post article time {
+  display: block;
+  font-size: 0.9rem;
+  color: var(--color-ink-muted);
+  margin-bottom: 1rem;
+}
+
+.postBody {
+  margin-top: 1.5rem;
+  padding-top: 1.5rem;
+}
+
+/* Style raw HTML content from MDX (dangerouslySetInnerHTML) */
+.postBody :global(h1),
+.postBody :global(h2),
+.postBody :global(h3) {
+  color: var(--color-accent);
+  font-family: var(--font-heading);
+  margin-top: 1.25rem;
+  margin-bottom: 0.5rem;
+}
+
+.postBody :global(h1) {
+  font-size: 1.5rem;
+}
+
+.postBody :global(h2) {
+  font-size: 1.25rem;
+}
+
+.postBody :global(h3) {
+  font-size: 1.1rem;
+}
+
+.postBody :global(p) {
+  font-size: 1rem;
+  margin: 0.5rem 0;
+}
+
+.postBody :global(ul),
+.postBody :global(ol) {
+  padding-left: 0;
+  list-style: none;
+}
+
+.postBody :global(pre),
+.postBody :global(code) {
+  font-family: ui-monospace, monospace;
+  font-size: 0.9rem;
+}
+
+.postBody :global(pre) {
+  border-radius: 4px;
+  padding: 1rem;
+  overflow-x: auto;
+  margin: 0 0 1rem;
+}
+
+.postBody :global(code) {
+  background: var(--color-paper-dark);
+  padding: 0.15em 0.4em;
+  border-radius: 3px;
+}
+
+.postBody :global(pre) :global(code) {
+  background: var(--color-code-bg);
+}

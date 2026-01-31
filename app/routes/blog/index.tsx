@@ -1,6 +1,7 @@
 import { Link, useLoaderData, type LoaderFunctionArgs } from "react-router";
 import { slugFromPath } from "./utils";
 import type { Route } from "./+types/index";
+import styles from "./index.module.css";
 
 const modules = import.meta.glob<{
   frontmatter: {
@@ -41,18 +42,19 @@ export function meta({}: Route.MetaArgs) {
 export default function BlogIndex() {
   const { posts } = useLoaderData<typeof loader>();
   return (
-    <main className="blog-index">
+    <main className={styles.index}>
       <h1>Blog</h1>
-      <ul className="post-list">
+      <ul className={styles.postList}>
         {posts.map((post) => (
           <li key={post.slug}>
-            <Link to={`/blog/${post.slug}`}>
-              <article>
-                <h2>{post.title}</h2>
-                {post.date && <time dateTime={post.date}>{post.date}</time>}
-                {post.excerpt && <p>{post.excerpt}</p>}
-              </article>
-            </Link>
+            <article className={styles.postItem}>
+              <Link to={`/blog/${post.slug}`} className={styles.postLink}>
+                <h2 className={styles.postTitle}>{post.title}</h2>
+              </Link>
+              {post.excerpt && (
+                <p className={styles.postExcerpt}>{post.excerpt}</p>
+              )}
+            </article>
           </li>
         ))}
       </ul>

@@ -1,0 +1,15 @@
+.home {
+  max-width: var(--max-width);
+  margin: 0 auto;
+  padding: 2rem 1.5rem;
+  padding-top: 3rem;
+}
+
+.home h1 {
+  margin-bottom: 1rem;
+}
+
+.home nav {
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+}
