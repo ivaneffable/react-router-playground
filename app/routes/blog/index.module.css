@@ -1,0 +1,36 @@
+.index {
+  max-width: var(--max-width);
+  margin: 0 auto;
+  padding: 2rem 0;
+  padding-top: 1.5rem;
+}
+
+.postList {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.postItem {
+  padding: 1rem 0;
+}
+
+.postLink {
+  display: block;
+  color: inherit;
+}
+
+.postLink:hover {
+  color: var(--color-accent);
+}
+
+.postTitle {
+  margin-bottom: 0.25rem;
+  font-size: 1.2rem;
+}
+
+.postExcerpt {
+  margin: 0.35rem 0 0;
+  font-size: 0.95rem;
+  color: var(--color-ink-muted);
+}

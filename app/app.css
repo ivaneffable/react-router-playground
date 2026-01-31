@@ -1,0 +1,73 @@
+/* 1990s fanzine–inspired: paper, ink, typewriter font, single accent */
+
+:root {
+  --color-paper: #f8f8f5;
+  --color-paper-dark: #eee;
+  --color-ink: #1a1a1a;
+  --color-ink-muted: #555;
+  --color-accent: #c00;
+  --color-accent-hover: #a00;
+  --color-divider: #999;
+  --color-border: #bbb;
+  --font-body: "Courier Prime", monospace;
+  --font-heading: "Courier Prime", monospace;
+  --max-width: 52rem;
+  --color-code-bg: #2d2d2d;
+  --color-code-text: #e8e8e8;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  font-size: 18px;
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background-color: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-body);
+  line-height: 1.6;
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-heading);
+  color: var(--color-accent);
+  font-weight: 700;
+  margin-top: 0;
+  line-height: 1.25;
+}
+
+h1 {
+  font-size: 1.85rem;
+  border-bottom: 2px solid var(--color-divider);
+  padding-bottom: 0.5rem;
+  margin-bottom: 1.25rem;
+}
+
+h2 {
+  font-size: 1.35rem;
+  margin-bottom: 0.5rem;
+}
+
+h3 {
+  font-size: 1.15rem;
+}
+
+a {
+  color: var(--color-accent);
+  text-decoration: none;
+}
+
+a:hover {
+  color: var(--color-accent-hover);
+  text-decoration: underline;
+}
