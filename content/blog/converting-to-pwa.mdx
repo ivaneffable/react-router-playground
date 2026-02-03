@@ -1,0 +1,354 @@
+---
+title: How We Converted This Site to a PWA
+status: published
+excerpt: A hands-on walkthrough of turning our React Router app into an installable Progressive Web App—what PWAs are, why they matter, and the real code and decisions behind the conversion.
+date: 2025-01-24
+---
+
+Progressive Web Apps (PWAs) let your website behave like a native app: users can install it on their phone or desktop, open it from the home screen, and use it offline. In this post we'll cover what a PWA is, why it's worth the effort, and then walk through **how this React Router site was actually converted**—with real code from the project and the reasoning behind each choice.
+
+## What is a PWA?
+
+A **Progressive Web App** is a web application that meets a set of technical and UX criteria so that browsers (and operating systems) can treat it as installable and app-like. As [web.dev](https://web.dev/learn/pwa) puts it: PWAs are web apps that use modern web capabilities to deliver an app-like experience. They're "progressive" because they still work as normal websites for users who don't install them, and they get better (installable, offline, etc.) when the environment supports it.
+
+To be installable and reliable, a PWA typically needs:
+
+1. **A Web App Manifest** — JSON that describes your app: name, icons, colors, display mode, start URL.
+2. **A Service Worker** — A script that runs in the background, can cache assets and handle requests, and enables offline behavior.
+3. **Served over HTTPS** — Required for service workers (except on `localhost`).
+
+Once these are in place, supporting browsers can offer "Add to Home Screen" / "Install app," and your app can run in a standalone window and use caching for faster loads and basic offline support.
+
+## How we did it: high-level
+
+We initially used **Vite** and **React Router** with SSR. The conversion relied on:
+
+1. **vite-plugin-pwa** — Generates the service worker (with Workbox) and wires the manifest.
+2. **A Web App Manifest** — In production the plugin generates it at build time; `public/manifest.webmanifest` is only needed for local development when the manifest is not yet generated.
+3. **Two small React components** — One to register the service worker and show update prompts (`PWARegister`), one to show an "Install App" button when the browser supports it (`InstallButton`).
+4. **Root layout updates** — Manifest link, theme-color meta, and PWA-related meta tags; then mounting the two components.
+
+Below we go through each part with the actual code and decisions.
+
+---
+
+## 1. Plugin and manifest
+
+We use **vite-plugin-pwa** so we don't hand-write the service worker. It generates a Workbox-based worker at build time and hooks it into the Vite pipeline. At build time the plugin also generates the manifest from the config below; the static file `public/manifest.webmanifest` is only needed for local development when the manifest is not yet generated.
+
+**Decision: `registerType: "prompt"`**  
+We chose `"prompt"` instead of `"autoUpdate"` so that when a new service worker is available, we can show a "New content available" message and let the user choose to reload. That avoids surprising users with an automatic reload and fits better with an app that might have unsaved state.
+
+Snippet from our `vite.config.ts`:
+
+```ts
+VitePWA({
+  registerType: "prompt",
+  includeAssets: ["favicon.ico"],
+  manifest: {
+    name: "React router project",
+    short_name: "Router project",
+    description: "Welcome to React Router Playground!",
+    theme_color: "#D97706", // Orange-600
+    background_color: "#FEF3C7", // Amber-50
+    display: "standalone",
+    start_url: "/",
+    scope: "/",
+    icons: [
+      {
+        src: "/icons/icon-192.png",
+        sizes: "192x192",
+        type: "image/png",
+        purpose: "any maskable",
+      },
+      {
+        src: "/icons/icon-512.png",
+        sizes: "512x512",
+        type: "image/png",
+        purpose: "any maskable",
+      },
+    ],
+  },
+  // workbox config next...
+});
+```
+
+**Decision: `display: "standalone"`**  
+This makes the installed app open in its own window without browser UI, so it feels like a native app. In local dev, `public/manifest.webmanifest` mirrors these values so the same metadata is available before the plugin has generated the manifest.
+
+---
+
+## 2. Caching strategy (Workbox)
+
+Because we use **React Router with SSR**, HTML is generated on the server. We don't precache HTML; we only precache static assets and then use **runtime caching** with different strategies per resource type.
+
+**Decisions:**
+
+- **HTML** — **NetworkFirst**: try the network first, fall back to cache (with a short timeout). That keeps SSR content fresh while still allowing cached fallbacks when offline.
+- **JS/CSS** — **StaleWhileRevalidate**: serve from cache immediately, then update cache in the background. Good for hashed assets that change on deploy.
+- **Images, fonts, icons** — **CacheFirst**: these change less often; caching them for a long time reduces network usage.
+- **No `navigateFallback`** — We set `navigateFallback: null` because the app is a single React Router app; we don't want the service worker to serve a single fallback HTML for every route. HTML is handled by the NetworkFirst rule for `text/html` requests.
+
+Relevant part of `vite.config.ts`:
+
+```ts
+workbox: {
+  globPatterns: ["**/*.{js,css,ico,png,svg,woff2}"],
+  navigateFallback: null,
+  runtimeCaching: [
+    {
+      urlPattern: /^https:\/\/fonts\.(googleapis|gstatic)\.com\/.*/i,
+      handler: "CacheFirst",
+      options: {
+        cacheName: "google-fonts-cache",
+        expiration: {
+          maxEntries: 10,
+          maxAgeSeconds: 60 * 60 * 24 * 365,
+        },
+        cacheableResponse: { statuses: [0, 200] },
+      },
+    },
+    {
+      urlPattern: /\.(?:png|jpg|jpeg|svg|gif|ico|woff2)$/,
+      handler: "CacheFirst",
+      options: {
+        cacheName: "static-assets-cache",
+        expiration: {
+          maxEntries: 100,
+          maxAgeSeconds: 60 * 60 * 24 * 30,
+        },
+      },
+    },
+    {
+      urlPattern: /\.(?:js|css)$/,
+      handler: "StaleWhileRevalidate",
+      options: { cacheName: "js-css-cache" },
+    },
+    {
+      urlPattern: ({ request }) =>
+        request.headers.get("accept")?.includes("text/html"),
+      handler: "NetworkFirst",
+      options: {
+        cacheName: "html-cache",
+        expiration: {
+          maxEntries: 50,
+          maxAgeSeconds: 60 * 60 * 24,
+        },
+        networkTimeoutSeconds: 3,
+      },
+    },
+  ],
+  skipWaiting: true,
+  clientsClaim: true,
+  cleanupOutdatedCaches: true,
+},
+devOptions: {
+  enabled: false,
+  type: "module",
+},
+```
+
+**Decision: `skipWaiting` and `clientsClaim`**  
+With `registerType: "prompt"`, we still use `skipWaiting: true` and `clientsClaim: true` so that once the user clicks "Reload" in our update UI, the new worker takes control immediately and old caches are dropped via `cleanupOutdatedCaches: true`.
+
+---
+
+## 3. Service worker registration and update UI
+
+We didn't want to scatter registration logic; we wanted a single place that registers the worker and reacts to updates. The plugin exposes a virtual module `virtual:pwa-register/react` with a `useRegisterSW` hook, so we built a small component around it.
+
+**Decision: Show a prompt only when there's something to say**  
+We show the UI only when `offlineReady` or `needRefresh` is true (e.g. "App ready to work offline" or "New content available, click reload to update"). Otherwise the component renders nothing. That keeps the page clean when there's no update and no first-time offline readiness message we care to show.
+
+Actual component from `app/PWARegister.tsx`:
+
+```tsx
+import { useRegisterSW } from "virtual:pwa-register/react";
+import styles from "./PWARegister.module.css";
+
+export function PWARegister() {
+  const {
+    offlineReady: [offlineReady, setOfflineReady],
+    needRefresh: [needRefresh, setNeedRefresh],
+    updateServiceWorker,
+  } = useRegisterSW({
+    onRegistered(r) {
+      console.log("SW Registered:", r);
+    },
+    onRegisterError(error) {
+      console.error("SW registration error", error);
+    },
+  });
+
+  const close = () => {
+    setOfflineReady(false);
+    setNeedRefresh(false);
+  };
+
+  if (!offlineReady && !needRefresh) {
+    return null;
+  }
+
+  return (
+    <div className={styles.container}>
+      <div className={styles.message}>
+        {offlineReady ? (
+          <span>App ready to work offline</span>
+        ) : (
+          <span>New content available, click reload to update.</span>
+        )}
+      </div>
+      <div className={styles.actions}>
+        {needRefresh && (
+          <button
+            onClick={() => updateServiceWorker(true)}
+            className={styles.reloadButton}
+          >
+            Reload
+          </button>
+        )}
+        <button onClick={close} className={styles.closeButton}>
+          Close
+        </button>
+      </div>
+    </div>
+  );
+}
+```
+
+So: registration and update flow are handled in one place, with a clear UX for "reload to get the new version."
+
+---
+
+## 4. Install button
+
+Browsers that support PWA installability fire a `beforeinstallprompt` event. We store that event and show an "Install App" button only when:
+
+- The app is **not** already running as an installed app (we check `display-mode: standalone` and, for iOS, `navigator.standalone`).
+- We have a stored `beforeinstallprompt` (so the browser considers the app installable).
+
+**Decision: No localStorage or "don't show again"**  
+We don't persist that the user dismissed the button. If they open the site again in a normal browser tab, the button can show again. That keeps behavior simple and avoids extra state; we can add "show once" later if needed.
+
+Relevant parts of `app/InstallButton.tsx`:
+
+```tsx
+interface BeforeInstallPromptEvent extends Event {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
+}
+
+function isStandalone(): boolean {
+  if (typeof window === "undefined") return false;
+  return (
+    window.matchMedia("(display-mode: standalone)").matches ||
+    (window.navigator as Navigator & { standalone?: boolean }).standalone ===
+      true
+  );
+}
+
+export function InstallButton() {
+  const [deferredPrompt, setDeferredPrompt] =
+    useState<BeforeInstallPromptEvent | null>(null);
+  const [showButton, setShowButton] = useState(false);
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      e.preventDefault();
+      setDeferredPrompt(e as BeforeInstallPromptEvent);
+    };
+    window.addEventListener("beforeinstallprompt", handler);
+    return () => window.removeEventListener("beforeinstallprompt", handler);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const standalone = isStandalone();
+    const installable = deferredPrompt !== null;
+    setShowButton(!standalone && installable);
+  }, [deferredPrompt]);
+
+  const handleInstallClick = async () => {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    if (outcome === "accepted") setShowButton(false);
+    setDeferredPrompt(null);
+  };
+
+  if (!showButton) return null;
+
+  return (
+    <button onClick={handleInstallClick} className={styles.installButton}>
+      Install App
+    </button>
+  );
+}
+```
+
+So: one component, no extra utilities, and the install prompt is shown only when the browser allows it and we're not already in standalone mode.
+
+---
+
+## 5. Wiring it in the root layout
+
+The root layout is where we link the manifest, set PWA-related meta tags, and mount the two components. That way every route gets the same PWA behavior without repeating code.
+
+From `app/root.tsx`:
+
+```tsx
+export const links: Route.LinksFunction = () => [
+  { rel: "manifest", href: "/manifest.webmanifest" },
+  { rel: "apple-touch-icon", href: "/icons/icon-192.png" },
+  // ... other links
+];
+
+export function Layout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="en">
+      <head>
+        <meta charSet="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="theme-color" content="#D97706" />
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+        <meta
+          name="apple-mobile-web-app-status-bar-style"
+          content="black-translucent"
+        />
+        <Meta />
+        <Links />
+      </head>
+      <body>
+        {children}
+        <ScrollRestoration />
+        <Scripts />
+        <PWARegister />
+        <InstallButton />
+      </body>
+    </html>
+  );
+}
+```
+
+**Decisions:**
+
+- **`theme-color`** — Matches the manifest so the browser chrome (and splash) use our orange (#D97706).
+- **Apple meta tags** — Improve behavior when the site is added to the home screen on iOS (full-screen capable, status bar style).
+- **Manifest and apple-touch-icon in `links`** — Ensures the manifest and icon are always present for installability and branding.
+
+---
+
+## Summary of decisions
+
+- **Service worker** — vite-plugin-pwa + Workbox. No hand-written SW; integrates with Vite and build hashes.
+- **Updates** — `registerType: "prompt"`. User chooses when to reload after an update.
+- **HTML** — NetworkFirst. SSR content stays fresh; cache used when offline or slow.
+- **Static assets** — CacheFirst / StaleWhileRevalidate. Fast repeat loads and offline; JS/CSS can refresh in background.
+- **Navigate fallback** — `null`. SPA is driven by React Router; we don't serve one HTML for all routes.
+- **Update UI** — Single `PWARegister` component. One place for registration and "New content available" prompt.
+- **Install UI** — `InstallButton` only when installable and not standalone. Clear install CTA without cluttering already-installed experience.
+- **Manifest** — Plugin config (build); static `manifest.webmanifest` for local dev only. Plugin generates manifest at build; static file used when manifest isn't generated yet.
+
+---
+
+Converting this React Router site to a PWA came down to: adding vite-plugin-pwa with a careful caching strategy for an SSR app, exposing update and install flows through two small components, and tying everything together in the root layout with the right manifest and meta tags. The result is an installable, cache-friendly app with explicit control over when updates are applied—all with minimal, real code you can reuse or adapt in your own project.
