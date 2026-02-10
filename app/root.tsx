@@ -1,16 +1,25 @@
 import {
   isRouteErrorResponse,
+  Link,
   Links,
   Meta,
   Outlet,
   Scripts,
   ScrollRestoration,
+  useLoaderData,
+  type LoaderFunctionArgs,
 } from "react-router";
 
 import type { Route } from "./+types/root";
 import "./app.css";
+import { getCurrentUser } from "./lib/session.server";
 import { PWARegister } from "./PWARegister";
 import { InstallButton } from "./InstallButton";
+
+export async function loader({ request }: LoaderFunctionArgs) {
+  const user = getCurrentUser(request);
+  return { user };
+}
 
 export const links: Route.LinksFunction = () => [
   { rel: "manifest", href: "/manifest.webmanifest" },
@@ -51,7 +60,27 @@ export function Layout({ children }: { children: React.ReactNode }) {
 }
 
 export default function App() {
-  return <Outlet />;
+  const { user } = useLoaderData<typeof loader>();
+
+  return (
+    <>
+      <div className="authBar">
+        {user ? (
+          <>
+            <span className="authBarName">{user.name}</span>
+            <Link to="/auth/logout" className="authBarSignOut">
+              Sign out
+            </Link>
+          </>
+        ) : (
+          <Link to="/auth/google" className="authBarSignIn">
+            Sign in with Google
+          </Link>
+        )}
+      </div>
+      <Outlet />
+    </>
+  );
 }
 
 export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
