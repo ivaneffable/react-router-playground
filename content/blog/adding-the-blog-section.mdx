@@ -1,0 +1,213 @@
+---
+title: Adding the Blog Section with MDX
+status: published
+excerpt: A walkthrough of how we added a blog to this React Router app—MDX posts in the repo, draft vs published, and the real code and decisions behind the implementation.
+date: 2026-02-13
+---
+
+We wanted a blog area with a list of posts and individual post pages, no CMS, and content as files in the repo. This post walks through how we actually built it.
+
+## What we’re building
+
+- **Blog index** at `/blog` — list of published posts (title, excerpt, link to post).
+- **Post page** at `/blog/:slug` — single post by slug; 404 for unknown slug or draft.
+- **Content as MDX files** in `content/blog/` — no CMS, no external API. Each file has YAML frontmatter (title, excerpt, date, status) and an MDX body.
+- **Draft vs published** — only `status: "published"` posts appear in the index and are reachable; drafts are omitted from the list and return 404 if someone guesses the URL.
+
+---
+
+## 1. MDX tooling and Vite
+
+We use **@mdx-js/rollup** so that `.mdx` files are compiled by Vite into React components.
+
+To get frontmatter into the compiled module (so loaders can read it), we use **remark-frontmatter** (parses the `---` block) and **remark-mdx-frontmatter** (injects `export const frontmatter = { ... }`).
+
+For syntax highlighting in code blocks we use **rehype-pretty-code** with a Shiki theme.
+
+**Decision: frontmatter as exported const**  
+Loaders need to read title, excerpt, date, and status without rendering the full MDX. So we compile MDX in a way that exposes `mod.frontmatter` after a dynamic import. That’s what `remark-mdx-frontmatter` does—without it we’d have to parse frontmatter separately or render every post just to build the index.
+
+Snippet from our `vite.config.ts`:
+
+```ts
+import mdx from "@mdx-js/rollup";
+import remarkFrontmatter from "remark-frontmatter";
+import remarkMdxFrontmatter from "remark-mdx-frontmatter";
+import rehypePrettyCode from "rehype-pretty-code";
+
+export default defineConfig({
+  plugins: [
+    mdx({
+      remarkPlugins: [remarkFrontmatter, remarkMdxFrontmatter],
+      rehypePlugins: [[rehypePrettyCode, { theme: "github-dark" }]],
+    }),
+    reactRouter(),
+    // ...
+  ],
+});
+```
+
+**Decision: `github-dark` for code blocks**
+
+---
+
+## 2. Content folder and frontmatter
+
+Posts live in **`content/blog/`** at the repo root. Each file is named by slug (e.g. `hello-world.mdx` → slug `hello-world`). The slug is derived from the filename, not from frontmatter, so the URL and the file stay in sync.
+
+Frontmatter shape we use:
+
+```yaml
+---
+title: How We Converted This Site to a PWA
+status: published
+excerpt: A hands-on walkthrough of turning our React Router app into an installable PWA...
+date: 2025-01-24
+---
+```
+
+**Pitfall: colons in YAML values**  
+If a value contains a colon (e.g. `excerpt: "Guide: how to start"`), YAML can treat it as a nested mapping and throw. Quote those values so the parser doesn’t get confused.
+
+---
+
+## 3. How we use `import.meta.glob`
+
+We do **not** load all MDX files on every request. We use **Vite’s `import.meta.glob`** so the bundler knows at build time which files exist; at runtime we only invoke the imports we need.
+
+**What the glob returns**  
+At build time, Vite finds all files matching the pattern and creates one chunk per file. At runtime the glob is an **object**: keys are paths (e.g. `"../../../content/blog/hello-world.mdx"`), values are **dynamic import functions** `() => import(...)`.
+
+**Index:** we call **every** import once to read `mod.frontmatter` and build the list of posts.  
+**Post page:** we find the **one** key whose slug matches the URL, then call **only** that import. So only one MDX file (and its chunk) is loaded per post view—the rest stay as separate chunks until the user navigates to them.
+
+---
+
+## 4. Route config and blog layout
+
+Blog routes live under `app/routes/blog/`: a layout (`route.tsx`), index (`index.tsx`), and dynamic slug (`$slug.tsx`). In `app/routes.ts` we wire them as children of the blog route:
+
+```ts
+export default [
+  index("routes/home.tsx"),
+  // ...
+  route("blog", "routes/blog/route.tsx", [
+    index("routes/blog/index.tsx"),
+    route(":slug", "routes/blog/$slug.tsx"),
+  ]),
+] satisfies RouteConfig;
+```
+
+The blog layout is minimal: nav (Home · Blog) and `<Outlet />` so every blog page has the same nav; from a post you click “Blog” to go back to the list.
+
+From `app/routes/blog/route.tsx`:
+
+```tsx
+import { Link, Outlet } from "react-router";
+import styles from "./route.module.css";
+
+export default function BlogLayout() {
+  return (
+    <div className={styles.section}>
+      <nav className={styles.nav}>
+        <Link to="/">Home</Link>
+        <span className={styles.separator}> · </span>
+        <Link to="/blog">Blog</Link>
+      </nav>
+      <Outlet />
+    </div>
+  );
+}
+```
+
+---
+
+## 5. Blog index: loader and list
+
+The index loader uses the glob to load every MDX module once, read frontmatter, derive the slug, filter to published, and sort by date (newest first). We return `{ posts }`; the component renders the list.
+
+From `app/routes/blog/index.tsx`:
+
+```tsx
+const modules = import.meta.glob<{
+  frontmatter: {
+    title?: string;
+    excerpt?: string;
+    date?: string;
+    status?: string;
+  };
+}>("../../../content/blog/*.mdx");
+
+export async function loader({}: LoaderFunctionArgs) {
+  const entries = await Promise.all(
+    Object.entries(modules).map(async ([path, importFn]) => {
+      const mod = await importFn();
+      const frontmatter = mod.frontmatter ?? {};
+      return {
+        slug: slugFromPath(path),
+        title: frontmatter.title ?? "Untitled",
+        excerpt: frontmatter.excerpt,
+        date: frontmatter.date,
+        status: frontmatter.status,
+      };
+    }),
+  );
+  const published = entries
+    .filter((p) => p.status === "published")
+    .sort((a, b) => (b.date ?? "").localeCompare(a.date ?? ""));
+  return { posts: published };
+}
+```
+
+---
+
+## 6. Post page: loader, HTML, and 404
+
+For `/blog/:slug` we need to serve one post. Loaders must return **serializable** data—we can’t send a React component over the wire. So we render the MDX default export to HTML on the server with **`renderToStaticMarkup`** and return that string; the component then uses **`dangerouslySetInnerHTML`** to display it.
+
+**Decision: server-side render MDX to HTML**  
+We call `renderToStaticMarkup(React.createElement(mod.default))` in the loader. That gives us a plain HTML string we can put in the loader payload. The client never receives the MDX or the component—just the pre-rendered HTML and the metadata (title, excerpt, date).
+
+From `app/routes/blog/$slug.tsx`:
+
+```tsx
+export async function loader({ params }: LoaderFunctionArgs) {
+  const slug = params.slug;
+  if (!slug) throw new Response("Not Found", { status: 404 });
+
+  const key = Object.keys(modules).find((p) => slugFromPath(p) === slug);
+  if (!key) throw new Response("Not Found", { status: 404 });
+
+  const mod = await modules[key]();
+  const frontmatter = mod.frontmatter ?? {};
+  if (frontmatter.status !== "published") {
+    throw new Response("Not Found", { status: 404 });
+  }
+
+  const Component = mod.default;
+  const html = renderToStaticMarkup(React.createElement(Component));
+
+  return {
+    slug,
+    title: frontmatter.title ?? "Untitled",
+    excerpt: frontmatter.excerpt,
+    date: frontmatter.date,
+    html,
+  };
+}
+```
+
+---
+
+## Summary of decisions
+
+- **Content** — MDX files in `content/blog/` with frontmatter; slug from filename. No CMS.
+- **Discovery** — Same `import.meta.glob("../../../content/blog/*.mdx")` in index and post; index loads all modules to creat the index; post loads only the module that matches the slug.
+- **Draft vs published** — Filter in the index loader and in the post loader, 404 if status is not published.
+- **Post body** — Rendered server-side with `renderToStaticMarkup`; loader returns HTML string; client renders with `dangerouslySetInnerHTML`. Loaders stay serializable.
+
+---
+
+## A future consideration
+
+Right now the index loader loads **every** MDX module at runtime just to read frontmatter. With a handful of posts that's fine; with many (e.g. hundreds or thousands) it becomes slow and heavy. A better approach would be either a **build-time manifest** (e.g. a script or Vite plugin that writes something like `blog-posts.json` with slug, title, excerpt, date, and status for all posts). The index loader would then read that manifest.
