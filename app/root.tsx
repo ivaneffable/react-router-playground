@@ -13,8 +13,11 @@ import {
 import type { Route } from "./+types/root";
 import "./app.css";
 import { getCurrentUser } from "./lib/session.server";
-import { PWARegister } from "./PWARegister";
+import { CookieConsentInit } from "./CookieConsentInit";
+import { GoogleAnalyticsLoader } from "./GoogleAnalyticsLoader";
+import { GoogleAnalyticsPageView } from "./GoogleAnalyticsPageView";
 import { InstallButton } from "./InstallButton";
+import { PWARegister } from "./PWARegister";
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const user = getCurrentUser(request);
@@ -52,6 +55,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
         {children}
         <ScrollRestoration />
         <Scripts />
+        <CookieConsentInit />
+        <GoogleAnalyticsLoader />
+        <GoogleAnalyticsPageView />
         <PWARegister />
         <InstallButton />
       </body>
