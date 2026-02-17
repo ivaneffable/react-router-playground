@@ -20,11 +20,14 @@ function loadGoogleAnalytics(measurementId: string) {
   if (document.getElementById("gtag-script")) return;
 
   window.dataLayer = window.dataLayer ?? [];
-  const gtag: Window["gtag"] = (...args) => {
-    window.dataLayer.push(args);
-  };
+  function gtag() {
+    window.dataLayer.push(arguments);
+  }
+
   window.gtag = gtag;
+  // @ts-expect-error the original gtag function uses arguments instead of ...args
   gtag("js", new Date());
+  // @ts-expect-error
   gtag("config", measurementId);
 
   const script = document.createElement("script");
