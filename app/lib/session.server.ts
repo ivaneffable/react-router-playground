@@ -3,7 +3,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 const SESSION_COOKIE = "session";
 const SESSION_MAX_AGE_SEC = 60 * 60 * 24 * 7; // 7 days
 
-export type SessionUser = {
+type SessionUser = {
   id: string;
   email: string;
   name: string;

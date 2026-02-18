@@ -13,11 +13,11 @@ import {
 import type { Route } from "./+types/root";
 import "./app.css";
 import { getCurrentUser } from "./lib/session.server";
-import { CookieConsentInit } from "./CookieConsentInit";
-import { GoogleAnalyticsLoader } from "./GoogleAnalyticsLoader";
-import { GoogleAnalyticsPageView } from "./GoogleAnalyticsPageView";
-import { InstallButton } from "./InstallButton";
-import { PWARegister } from "./PWARegister";
+import { CookieConsentInit } from "./root-utils/CookieConsentInit";
+import { GoogleAnalyticsLoader } from "./root-utils/GoogleAnalyticsLoader";
+import { GoogleAnalyticsPageView } from "./root-utils/GoogleAnalyticsPageView";
+import { InstallButton } from "./root-utils/InstallButton";
+import { PWARegister } from "./root-utils/PWARegister";
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const user = getCurrentUser(request);

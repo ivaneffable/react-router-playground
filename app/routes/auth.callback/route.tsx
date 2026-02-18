@@ -1,7 +1,7 @@
 import { redirect, type LoaderFunctionArgs } from "react-router";
 import { getStateFromCookie, clearStateCookie } from "~/lib/oauth-state.server";
-import { exchangeCodeForUser } from "~/lib/google-oauth.server";
 import { createSession } from "~/lib/session.server";
+import { exchangeCodeForUser } from "./google-oauth.server";
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const url = new URL(request.url);

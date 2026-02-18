@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import {
   COOKIECONSENT_CHANGE_EVENT,
   hasAnalyticsConsent,
-} from "./lib/cookie-consent";
+} from "./cookie-consent";
 
 const MEASUREMENT_ID = import.meta.env.VITE_GA_MEASUREMENT_ID as
   | string
