@@ -1,6 +1,6 @@
 const TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
 
-export interface GoogleUser {
+interface GoogleUser {
   id: string;
   email: string;
   name: string;
