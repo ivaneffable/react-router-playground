@@ -1,0 +1,246 @@
+---
+title: Adding Google Authentication to a React Router App
+status: published
+excerpt: A walkthrough of implementing "Sign in with Google" using OAuth 2.0 authorization code flow—state for CSRF, signed cookies for sessions, and the real code and security decisions behind it.
+date: 2026-02-18
+---
+
+Adding "Sign in with Google" to a React Router app means handling OAuth 2.0 on the server: redirecting to Google, validating the callback, and establishing a session. This post walks through how we did it—the flow, the security choices, and the actual code from the project, including learnings we picked up along the way.
+
+## What we're building
+
+- **Sign-in entry** — A "Sign in with Google" link that goes to `GET /auth/google`; the loader redirects to Google with a **state** parameter and stores that state in a cookie.
+- **Callback** — `GET /auth/callback` receives the `code` and `state` from Google; we validate **state** against the cookie (CSRF protection), exchange the code for tokens, decode the user from the **id_token**, create a **signed session cookie**, and redirect home.
+- **Session** — No server-side session store. The session is a **signed cookie** (payload + HMAC-SHA256 signature); the server verifies it whenever the root loader runs and exposes **current user** (id, email, name) or null.
+- **Root and UI** — The root loader calls `getCurrentUser(request)` and returns `{ user }`; the root component (and any child via `useRouteLoaderData("root")`) can show "Sign in" vs "Sign out" and the user's name.
+- **Sign-out** — `GET /auth/logout` clears the session cookie and redirects home.
+
+Environment: **GOOGLE_CLIENT_ID**, **GOOGLE_CLIENT_SECRET**, **SESSION_SECRET**; callback URL registered in Google Cloud Console (e.g. `https://your-app.netlify.app/auth/callback`).
+
+---
+
+## 1. Why the state parameter matters (CSRF)
+
+In the OAuth flow, the user is sent to Google and then redirected back to your app with a `code`. That code is one-time and valuable. Without **state**, abuse is possible: the attacker does the OAuth flow in their own browser and gets a valid `code`, then tricks the victim into visiting your callback URL with that code (e.g. a link on a malicious site). Your server exchanges the code and creates a session—in the victim's browser. So the victim ends up logged into your app as the **attacker**, and might perform actions thinking they're on their own account.
+
+**State** fixes this: it ties the callback to the same browser that started the flow. You generate a random value, store it (e.g. in a cookie), and send it to Google; when Google redirects back, you check that the `state` in the URL matches the stored value. Only the browser that started the flow has the cookie, so injected or cross-site callback requests can be rejected.
+
+We generate state with `randomBytes(32).toString("hex")`, set a short-lived HTTP-only cookie (e.g. 10 minutes), and pass that same value as the `state` query param to Google. On callback we compare URL state to the cookie; if they don't match we redirect home without exchanging the code.
+
+From `app/lib/oauth-state.server.ts`:
+
+```ts
+import { randomBytes } from "node:crypto";
+
+const STATE_COOKIE = "oauth_state";
+const STATE_MAX_AGE_SEC = 60 * 10; // 10 minutes
+
+export function createStateCookie(request: Request): [string, string] {
+  const state = randomBytes(32).toString("hex");
+  const secure = isSecure(request) ? "; Secure" : "";
+  const cookie = `${STATE_COOKIE}=${state}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${STATE_MAX_AGE_SEC}${secure}`;
+  return [state, cookie];
+}
+```
+
+---
+
+## 2. Scopes: what we ask from Google
+
+**Scope** tells Google what your app is allowed to know about the user. You send it in the authorization request; the user consents on the Google sign-in screen; Google then returns that data in the tokens/userinfo.
+
+- **openid** — Use OpenID Connect so you get an **id_token** (JWT) with a stable user **id** (`sub`). Needed for "Sign in with Google" identity.
+- **email** — Access to the user's **email** (and `email_verified`).
+- **profile** — Access to basic profile info, including **name** (and picture, etc.).
+
+So the scope is what justifies your app getting **id, email, and name** for the session. We use `"openid email profile"` in the auth URL:
+
+From `app/routes/auth.google.tsx`:
+
+```tsx
+const GOOGLE_AUTH_BASE = "https://accounts.google.com/o/oauth2/v2/auth";
+const SCOPE = "openid email profile";
+
+export async function loader({ request }: LoaderFunctionArgs) {
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  // ...
+  const [state, stateCookie] = createStateCookie(request);
+  const params = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    response_type: "code",
+    scope: SCOPE,
+    state,
+  });
+  const authUrl = `${GOOGLE_AUTH_BASE}?${params.toString()}`;
+  return redirect(authUrl, { headers: { "Set-Cookie": stateCookie } });
+}
+```
+
+This route never renders UI; the loader always redirects. React Router still expects a **default export** (the component for that route). Without it the route module is invalid. We use `export default function AuthGoogle() { return null; }` to satisfy the framework.
+
+---
+
+## 3. Callback: validate state, exchange code, create session
+
+The callback route reads `code` and `state` from the URL, validates `state` against the cookie, then exchanges the code for tokens. We use the **id_token** (returned when `openid` is in scope) to get the user's `sub`, `email`, and `name`—no separate userinfo call needed.
+
+From `app/routes/auth.callback/route.tsx`:
+
+```tsx
+export async function loader({ request }: LoaderFunctionArgs) {
+  const url = new URL(request.url);
+  const code = url.searchParams.get("code");
+  const stateFromUrl = url.searchParams.get("state");
+
+  const storedState = getStateFromCookie(request);
+  if (!stateFromUrl || !storedState || stateFromUrl !== storedState) {
+    return redirect("/", {
+      headers: { "Set-Cookie": clearStateCookie(request) },
+    });
+  }
+
+  const clearStateHeader = clearStateCookie(request);
+  if (!code) {
+    return redirect("/", { headers: { "Set-Cookie": clearStateHeader } });
+  }
+
+  const redirectUri = `${url.origin}/auth/callback`;
+  try {
+    const user = await exchangeCodeForUser(code, redirectUri);
+    const sessionCookie = createSession(
+      { id: user.id, email: user.email, name: user.name },
+      request,
+    );
+    const headers = new Headers();
+    headers.append("Set-Cookie", clearStateHeader);
+    headers.append("Set-Cookie", sessionCookie);
+    return redirect("/", { headers });
+  } catch {
+    return redirect("/", {
+      headers: { "Set-Cookie": clearStateHeader },
+    });
+  }
+}
+```
+
+Token exchange and id_token decoding live in `google-oauth.server.ts`: we POST the code to Google's token endpoint with `client_id`, `client_secret`, and the same `redirect_uri` we used in the auth URL, then decode the JWT payload (base64url) to read `sub`, `email`, and `name`. The **redirect_uri** must match exactly what is registered in Google Cloud Console.
+
+---
+
+## 4. Signed cookie session (no server-side store)
+
+We don't use a database or in-memory store for sessions. The session is a **signed cookie**: the user data lives in the cookie, and a **signature** proves the server created it and that it wasn't tampered with.
+
+**What happens in createSession:**
+
+1. **Payload** — The user data (id, email, name) plus an `iat` (issued-at) timestamp is JSON-stringified and base64url-encoded so it can safely go in a cookie.
+2. **Signature** — That payload string is signed with **HMAC-SHA256** using `SESSION_SECRET`; only someone with the secret can produce a valid signature for that payload.
+3. **Cookie value** — The value stored in the cookie is `payload.signature` (e.g. `eyJpZCI6...` + `.` + `a1b2c3...`).
+4. **Set-Cookie** — The function returns the full **Set-Cookie** header: cookie name, value, and attributes (Path, HttpOnly, SameSite=Lax, Max-Age, Secure when HTTPS).
+
+Whenever the root loader runs (e.g. on full page load or refresh), it calls `getCurrentUser`, which reads the cookie, recomputes the signature, and checks it matches. If the signature is wrong or missing, the user is treated as logged out. On client-side navigations (e.g. clicking a link), React Router typically reuses the root loader data, so the server doesn't re-run the root loader or re-verify the cookie on every navigation—only when a new request actually runs the root loader.
+
+**Why timingSafeEqual?** When verifying the signature we use Node's **`timingSafeEqual`**—a constant-time comparison. A normal `expected === signature` or byte-by-byte loop returns as soon as it finds a mismatch, so response time can leak _which_ byte was wrong. An attacker could send many requests with guessed cookies and use timing to learn the signature byte-by-byte. `timingSafeEqual` always compares every byte, so response time doesn't reveal where the mismatch is.
+
+From `app/lib/session.server.ts`:
+
+```ts
+function verifySignature(
+  payload: string,
+  signature: string,
+  secret: string,
+): boolean {
+  const expected = sign(payload, secret);
+  if (expected.length !== signature.length) return false;
+  return timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
+}
+```
+
+---
+
+## 5. Exposing the user to the app
+
+The root loader reads the session and returns `{ user }`. It runs when the app first loads (or on refresh / direct URL), so the session is verified then; on subsequent client-side navigations the client reuses that loader data unless the root is revalidated. The root component uses `useLoaderData<typeof loader>()` and shows "Sign in with Google" vs the user's name and "Sign out" accordingly.
+
+From `app/root.tsx`:
+
+```tsx
+export async function loader({ request }: LoaderFunctionArgs) {
+  const user = getCurrentUser(request);
+  return { user };
+}
+
+export default function App() {
+  const { user } = useLoaderData<typeof loader>();
+  return (
+    <>
+      <div className="authBar">
+        {user ? (
+          <>
+            <span className="authBarName">{user.name}</span>
+            <Link to="/auth/logout" className="authBarSignOut">
+              Sign out
+            </Link>
+          </>
+        ) : (
+          <Link to="/auth/google" className="authBarSignIn">
+            Sign in with Google
+          </Link>
+        )}
+      </div>
+      <Outlet />
+    </>
+  );
+}
+```
+
+If a **child route** (e.g. home or a protected page) needs the user, it can use **`useRouteLoaderData("root")`**—the root route id is `"root"` in React Router's default route tree. Example: `const rootData = useRouteLoaderData("root"); const user = rootData?.user ?? null;`.
+
+---
+
+## 6. Sign-out and route config
+
+Sign-out is a route whose loader clears the session cookie and redirects home. No UI needed; same pattern as auth/google and auth/callback: default export returns `null`.
+
+From `app/routes/auth.logout.tsx`:
+
+```tsx
+export async function loader({ request }: LoaderFunctionArgs) {
+  const clearCookieHeader = clearSession(request);
+  return redirect("/", {
+    headers: { "Set-Cookie": clearCookieHeader },
+  });
+}
+```
+
+Routes are wired in `app/routes.ts`:
+
+```ts
+route("auth/google", "routes/auth.google.tsx"),
+route("auth/callback", "routes/auth.callback/route.tsx"),
+route("auth/logout", "routes/auth.logout.tsx"),
+```
+
+---
+
+## 7. Google Cloud Console setup
+
+To get **Client ID** and **Client Secret** and to register the callback URL:
+
+1. **Create or select a project** in [Google Cloud Console](https://console.cloud.google.com/).
+2. **OAuth consent screen** — APIs & Services → OAuth consent screen. Choose External for any Google account; fill App name, support email, and add scopes for email and profile (or the OpenID Connect equivalents).
+3. **Credentials** — Create credentials → OAuth client ID → Web application. Set **Authorized redirect URIs** to the exact callback URL (e.g. `https://your-app.netlify.app/auth/callback` and `http://localhost:5173/auth/callback` for dev). Copy Client ID and Client secret.
+4. **App** — Put them in env as `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`; use the same `redirect_uri` when building the auth URL and when calling the token endpoint.
+
+Reference: [Google OAuth 2.0 for Web server apps](https://developers.google.com/identity/protocols/oauth2/web-server).
+
+---
+
+## Summary of decisions
+
+- **OAuth** — Authorization code flow; state in a short-lived cookie for CSRF; scopes `openid email profile` for id, email, name from the id_token.
+- **Callback** — React Router route at `/auth/callback`; validate state, exchange code, create session, redirect; no client-side OAuth library.
+- **Session** — Signed cookie (payload + HMAC-SHA256); no server-side store; signature verified when the root loader runs, not on every client-side navigation; `timingSafeEqual` for verification; HttpOnly, SameSite=Lax, Secure in production.
+- **User in the app** — Root loader returns `{ user }`; root uses `useLoaderData`; children use `useRouteLoaderData("root")` when they need the user.
+- **Auth routes** — Default export `return null` where the loader always redirects, to satisfy React Router's route module contract.
