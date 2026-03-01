@@ -1,6 +1,7 @@
 import { redirect, type LoaderFunctionArgs } from "react-router";
 import { getStateFromCookie, clearStateCookie } from "~/lib/oauth-state.server";
 import { createSession } from "~/lib/session.server";
+import { upsertUser } from "~/lib/user.server";
 import { exchangeCodeForUser } from "./google-oauth.server";
 
 export async function loader({ request }: LoaderFunctionArgs) {
@@ -33,6 +34,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
   try {
     const user = await exchangeCodeForUser(code, redirectUri);
 
+    await upsertUser({ id: user.id, email: user.email, name: user.name });
+
     // 4.4 - On success: create session and redirect to home
     const sessionCookie = createSession(
       { id: user.id, email: user.email, name: user.name },
@@ -42,9 +45,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
     headers.append("Set-Cookie", clearStateHeader);
     headers.append("Set-Cookie", sessionCookie);
     return redirect("/", { headers });
-  } catch {
-    // 4.5 - On failure: redirect to safe page, do not set session
-    return redirect("/", {
+  } catch (err) {
+    // Upsert or token exchange failed: do not set session; redirect home with error param (no PII in logs)
+    console.error("Auth callback failed (token exchange or user persistence)", err);
+    return redirect("/?auth_error=sign_in_failed", {
       headers: { "Set-Cookie": clearStateHeader },
     });
   }

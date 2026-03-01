@@ -1,3 +1,53 @@
+.authBar {
+  position: fixed;
+  top: 0.75rem;
+  right: 0.75rem;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.authBarSignInBlock {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.35rem;
+}
+
+.authBarSignIn {
+  display: inline-block;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.8125rem;
+  background-color: #4285f4;
+  color: white;
+  text-decoration: none;
+  border-radius: 0.25rem;
+  font-weight: 500;
+}
+
+.authBarSignIn:hover {
+  color: white;
+  text-decoration: none;
+  opacity: 0.9;
+}
+
+.authBarName {
+  font-size: 0.8125rem;
+  color: var(--color-ink-muted);
+}
+
+.authBarSignOut {
+  font-size: 0.8125rem;
+}
+
+.authErrorSmall {
+  font-size: 0.75rem;
+  color: var(--color-ink-muted);
+  max-width: 12rem;
+  text-align: right;
+}
+
 .errorBoundary {
   max-width: var(--max-width);
   margin: 0 auto;
