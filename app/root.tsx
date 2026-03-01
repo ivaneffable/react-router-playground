@@ -7,12 +7,14 @@ import {
   Scripts,
   ScrollRestoration,
   useLoaderData,
+  useSearchParams,
   type LoaderFunctionArgs,
 } from "react-router";
 
 import type { Route } from "./+types/root";
 import "./app.css";
 import { getCurrentUser } from "./lib/session.server";
+import styles from "./root.module.css";
 import { CookieConsentInit } from "./root-utils/CookieConsentInit";
 import { GoogleAnalyticsLoader } from "./root-utils/GoogleAnalyticsLoader";
 import { GoogleAnalyticsPageView } from "./root-utils/GoogleAnalyticsPageView";
@@ -67,21 +69,30 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
 export default function App() {
   const { user } = useLoaderData<typeof loader>();
+  const [searchParams] = useSearchParams();
+  const authError = searchParams.get("auth_error") === "sign_in_failed";
 
   return (
     <>
-      <div className="authBar">
+      <div className={styles.authBar}>
         {user ? (
           <>
-            <span className="authBarName">{user.name}</span>
-            <Link to="/auth/logout" className="authBarSignOut">
+            <span className={styles.authBarName}>{user.name}</span>
+            <Link to="/auth/logout" className={styles.authBarSignOut}>
               Sign out
             </Link>
           </>
         ) : (
-          <Link to="/auth/google" className="authBarSignIn">
-            Sign in with Google
-          </Link>
+          <div className={styles.authBarSignInBlock}>
+            <Link to="/auth/google" className={styles.authBarSignIn}>
+              Sign in with Google
+            </Link>
+            {authError && (
+              <span className={styles.authErrorSmall} role="alert">
+                Sign-in could not be completed. Please try again.
+              </span>
+            )}
+          </div>
         )}
       </div>
       <Outlet />
