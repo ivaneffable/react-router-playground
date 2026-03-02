@@ -1,0 +1,246 @@
+---
+title: Adding Observability with Google Analytics
+status: published
+excerpt: A walkthrough of adding Google Analytics 4 to a React Router app, cookie consent first, gtag.js injection, page views on navigation, and the real code and gotchas behind it.
+date: 2026-03-01
+---
+
+We wanted to understand how visitors use the site, which pages they view, how they navigate, and optionally how they interact with key actions. Adding Google Analytics 4 (GA4) gives that visibility without changing the app’s core behavior. This post walks through how we did it: consent before any script, a single page_view per location, and the actual code from the project.
+
+## What we're building
+
+- **Cookie consent first** — A consent banner ([CookieConsent](https://cookieconsent.orestbida.com/) by Orest Bida) so users can accept or reject analytics cookies before any GA script runs. GA loads only when the user accepts; the choice is persisted so we don’t ask on every visit.
+- **Script loading** — Inject gtag.js from the root layout only when `VITE_GA_MEASUREMENT_ID` is set and the user has consented. Load the script asynchronously; initialize `dataLayer` and a stub `gtag` so config and events can be queued before the real script arrives.
+- **Page views** — One `page_view` hit per distinct location: on initial load and on each client-side navigation.
+- **Custom events** — A thin helper `sendGAEvent(name, params)` that no-ops when GA isn’t loaded or the user hasn’t consented.
+- **Config** — Measurement ID from env (`VITE_GA_MEASUREMENT_ID`); never committed. Different IDs per environment (e.g. local, staging, production).
+
+Environment: **VITE_GA_MEASUREMENT_ID** (e.g. `G-XXXXXXXXXX` from a GA4 web stream). Leave unset for local dev if you don’t need tracking.
+
+---
+
+## 1. Why cookie consent before GA
+
+Analytics cookies are non-essential. Under ePrivacy/GDPR and CCPA, we should get consent before setting them or loading scripts that do. So we don’t inject gtag.js on first paint, we show a consent banner, and only when the user accepts do we load GA and send hits.
+
+We use [CookieConsent](https://cookieconsent.orestbida.com/) (vanilla JS) for the banner and for persisting the choice. It gives us an analytics category, Accept all / Reject all, and callbacks so we can react when consent changes. Our app listens for that and loads GA only after acceptance.
+
+From `app/root-utils/cookie-consent.ts`:
+
+```ts
+import * as CookieConsent from "vanilla-cookieconsent";
+
+const ANALYTICS_CATEGORY = "analytics";
+
+export const COOKIECONSENT_CHANGE_EVENT = "cookieconsent:change";
+
+function dispatchConsentChange() {
+  if (typeof document === "undefined") return;
+  document.dispatchEvent(
+    new CustomEvent(COOKIECONSENT_CHANGE_EVENT, {
+      detail: {
+        analyticsAccepted: CookieConsent.acceptedCategory(ANALYTICS_CATEGORY),
+      },
+    }),
+  );
+}
+
+export const cookieConsentConfig: Parameters<typeof CookieConsent.run>[0] = {
+  categories: {
+    necessary: { enabled: true, readOnly: true },
+    analytics: {},
+  },
+  onConsent: () => dispatchConsentChange(),
+  onChange: () => dispatchConsentChange(),
+  language: {
+    default: "en",
+    translations: {
+      en: {
+        consentModal: {
+          title: "We use cookies",
+          description:
+            "We use cookies for analytics to understand how you use the site. You can accept or reject non-essential cookies.",
+          acceptAllBtn: "Accept all",
+          acceptNecessaryBtn: "Reject all",
+        },
+        // ...
+      },
+    },
+  },
+};
+
+export function hasAnalyticsConsent(): boolean {
+  if (typeof window === "undefined") return false;
+  return CookieConsent.acceptedCategory(ANALYTICS_CATEGORY);
+}
+```
+
+We run CookieConsent from the root layout once; it shows the banner when no stored choice exists and persists the user’s decision. When they accept or change preferences, we dispatch a custom event so the GA loader can react.
+
+---
+
+## 2. The gtag stub and why it uses `arguments`
+
+The real gtag.js script is loaded **asynchronously**, so it may not be there when we want to call `gtag("js", new Date())` and `gtag("config", measurementId)`. We need a stub that:
+
+1. **Queues initial commands** — Push those calls into `dataLayer`. When the real script loads, it reads the queue, runs the commands, then replaces `window.gtag`. So the stub is the standard GA pattern for running config before the script is ready.
+2. **Keeps `window.gtag` defined** — Any code (e.g. the page-view component or `sendGAEvent`) can call `window.gtag(...)` before the script has loaded. Without the stub those calls would throw; with it, every call is pushed to `dataLayer` and processed when the real script loads.
+
+**Critical:** The stub must push **`arguments`** into `dataLayer`, not a plain array. The official gtag.js expects each `dataLayer` entry to be the `arguments` object (as in the standard snippet `function gtag(){ dataLayer.push(arguments); }`). If you push a plain array (e.g. `dataLayer.push(args)`), the real script won’t process the queue correctly and won’t replace `window.gtag`, so no collect requests are sent. We hit this during implementation: the script loaded and the queue had entries, but no network requests went to Google until we switched to pushing `arguments`.
+
+From `app/root-utils/GoogleAnalyticsLoader.tsx`:
+
+```ts
+function loadGoogleAnalytics(measurementId: string) {
+  if (typeof document === "undefined" || typeof window === "undefined") return;
+  if (document.getElementById("gtag-script")) return;
+
+  window.dataLayer = window.dataLayer ?? [];
+  function gtag() {
+    window.dataLayer.push(arguments);
+  }
+  window.gtag = gtag;
+
+  gtag("js", new Date());
+  gtag("config", measurementId);
+
+  const script = document.createElement("script");
+  script.id = "gtag-script";
+  script.async = true;
+  script.src = `https://www.googletagmanager.com/gtag/js?id=${measurementId}`;
+  document.head.appendChild(script);
+}
+```
+
+**How `loadGoogleAnalytics` gets called** — The `GoogleAnalyticsLoader` component is what actually invokes it. A single `useEffect` does three things:
+
+1. **Bail out if no measurement ID** — If `VITE_GA_MEASUREMENT_ID` is missing or empty, the effect returns early and never loads GA.
+
+2. **Define `maybeLoad()`** — A small helper that: skips if we’ve already loaded (`loadedRef.current`); skips if the user hasn’t consented (`!hasAnalyticsConsent()`); otherwise sets the ref to true and calls `loadGoogleAnalytics(id)`. So we only ever inject the script once, and only when consent is given.
+
+3. **Run once and listen for consent changes** — The effect calls `maybeLoad()` immediately. That covers the case where the user **already** accepted in a previous visit: CookieConsent has restored their choice, so `hasAnalyticsConsent()` is true on first load and we load GA right away. The effect also adds a listener for `COOKIECONSENT_CHANGE_EVENT` (fired when the user accepts or rejects in the banner).
+
+From the same file, the component:
+
+```tsx
+export function GoogleAnalyticsLoader() {
+  const loadedRef = useRef(false);
+
+  useEffect(() => {
+    const id =
+      typeof MEASUREMENT_ID === "string" && MEASUREMENT_ID.trim()
+        ? MEASUREMENT_ID.trim()
+        : "";
+    if (!id) return;
+
+    const maybeLoad = () => {
+      if (loadedRef.current) return;
+      if (!hasAnalyticsConsent()) return;
+      loadedRef.current = true;
+      loadGoogleAnalytics(id);
+    };
+
+    maybeLoad();
+
+    const handler = (e: CustomEvent<{ analyticsAccepted: boolean }>) => {
+      if (e.detail?.analyticsAccepted) maybeLoad();
+    };
+    document.addEventListener(
+      COOKIECONSENT_CHANGE_EVENT,
+      handler as EventListener,
+    );
+    return () =>
+      document.removeEventListener(
+        COOKIECONSENT_CHANGE_EVENT,
+        handler as EventListener,
+      );
+  }, []);
+
+  return null;
+}
+```
+
+---
+
+## 3. One page_view per location (no double-send)
+
+We want exactly one `page_view` per distinct location: initial load and every client-side navigation. So we use a **single trigger**: one effect that depends on the current location (e.g. `useLocation()` from React Router). When the effect runs, if gtag is ready we send one `page_view` with `page_path` and `page_title`.
+
+From `app/root-utils/GoogleAnalyticsPageView.tsx`:
+
+```tsx
+import { useEffect } from "react";
+import { useLocation } from "react-router";
+
+export function GoogleAnalyticsPageView() {
+  const location = useLocation();
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.gtag !== "function")
+      return;
+
+    const pagePath = location.pathname + location.search;
+    const pageTitle = typeof document !== "undefined" ? document.title : "";
+
+    window.gtag("event", "page_view", {
+      page_path: pagePath,
+      page_title: pageTitle,
+    });
+  }, [location]);
+
+  return null;
+}
+```
+
+By depending on `location`, the effect runs on mount (initial location) and on every navigation. gtag only exists when the measurement ID is set and the user has consented (GoogleAnalyticsLoader gates that), so we only need to guard on `window.gtag`. Result: one page_view per distinct location view.
+
+---
+
+## 4. Custom events and root wiring
+
+For future features we expose a small helper that no-ops when GA isn’t loaded or consent wasn’t given:
+
+From `app/lib/analytics.ts`:
+
+```ts
+export function sendGAEvent(
+  name: string,
+  params?: Record<string, unknown>,
+): void {
+  if (typeof window === "undefined" || typeof window.gtag !== "function")
+    return;
+  window.gtag("event", name, params ?? {});
+}
+```
+
+Root layout mounts the consent banner, the GA loader, and the page-view component so every route gets them:
+
+From `app/root.tsx`:
+
+```tsx
+<CookieConsentInit />
+<GoogleAnalyticsLoader />
+<GoogleAnalyticsPageView />
+```
+
+---
+
+## 5. Google Analytics setup
+
+To get the measurement ID used by this implementation:
+
+1. **Create or sign in** at [Google Analytics](https://analytics.google.com/) and create or select a **GA4 property**.
+2. **Add a web data stream** — Admin → Data streams → Add stream → Web; enter your site URL. Google shows a **Measurement ID** in the form `G-XXXXXXXXXX`.
+3. **Use it in the app** — Set `VITE_GA_MEASUREMENT_ID` in your environment (e.g. `.env` locally and in Netlify for production). Never commit it. Leave unset where you don’t want tracking (e.g. local dev).
+
+Reference: [Google Analytics for developers](https://developers.google.com/analytics) — tagging (gtag.js), events, and GA4 setup.
+
+---
+
+## Summary of decisions
+
+- **Consent first** — CookieConsent banner; GA script and hits only after the user accepts analytics; choice persisted so we don’t load GA on reject or before consent.
+- **Stub gtag** — Define `dataLayer` and `gtag` before loading gtag.js; push **`arguments`** (not a plain array) so the real script can process the queue and take over `window.gtag`.
+- **Page views** — Single effect with `useLocation()` in the dependency array; one `page_view` per effect run; no separate “script ready” + “mount” triggers to avoid double-send on first load.
+- **Config** — `VITE_GA_MEASUREMENT_ID` at build time; no script or hits when ID is missing or empty.
+- **Custom events** — `sendGAEvent(name, params)` no-ops when gtag isn’t available; otherwise forwards to `window.gtag('event', name, params)`.
