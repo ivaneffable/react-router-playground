@@ -1,6 +1,7 @@
 import { Link } from "react-router";
 import type { Route } from "./+types/home";
 import styles from "./home.module.css";
+import { SentimentBlock } from "./sentimentBlock";
 
 export function meta({}: Route.MetaArgs) {
   return [
@@ -16,6 +17,7 @@ export default function Home() {
       <nav>
         <Link to="/blog">Blog</Link>
       </nav>
+      <SentimentBlock />
     </div>
   );
 }
